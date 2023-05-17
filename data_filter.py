@@ -28,12 +28,14 @@ def get_model(model_name, dataset, data_path):
     return get_network(model_name, channel, num_classes, im_size)
 
 
-
-
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
     def __init__(self):
+        self.count = None
+        self.sum = None
+        self.avg = None
+        self.val = None
         self.reset()
 
     def reset(self):
