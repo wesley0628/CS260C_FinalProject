@@ -1,13 +1,9 @@
 import argparse
-
-import numpy
+import numpy as np
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
 from utils import get_dataset, get_network
 from torch.utils.data import Dataset, DataLoader
-import torchvision.datasets as datasets
 
 
 class IndexedDataset(Dataset):
@@ -142,21 +138,33 @@ def validate(val_loader, model, criterion, device):
     return top1.avg, losses.avg
 
 
+def calculate_forgetting_score(filter_matrix):
+    num_rows, num_cols = filter_matrix.shape
+    index_changes = np.zeros(num_cols, dtype=int)
+
+    for i in range(1, num_rows):
+        current_row = filter_matrix[i]
+        previous_row = filter_matrix[i - 1]
+        row_changes = np.abs(current_row - previous_row)
+        index_changes += row_changes
+    return index_changes
+
+
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--filter_method', type=str, default='forgetting')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
-    parser.add_argument('--model', type=str, default='ConvNet')
+    parser.add_argument('--model', type=str, default='MLP')
     parser.add_argument('--ratio', type=str, default='0.5')
     parser.add_argument('--data_path', type=str, default='data')
     parser.add_argument('--batch_size', type=str, default='256')
-    parser.add_argument('--epochs', type=str, default='30')
+    parser.add_argument('--epochs', type=str, default='3')
     parser.add_argument('--workers', type=str, default='0')
     args = parser.parse_args()
 
     device = ("cuda:0" if torch.cuda.is_available() else "cpu")
     dst_dataset = IndexedDataset(args.dataset, args.data_path)
-    _, _, _, _, _, _, _, _, val_loader = get_dataset(args.dataset, args.data_path)
+    _, _, num_classes, _, _, _, _, _, val_loader = get_dataset(args.dataset, args.data_path)
     train_dl = DataLoader(dst_dataset, batch_size=int(args.batch_size), shuffle=True, num_workers=int(args.workers),
                           pin_memory=True)
 
@@ -164,12 +172,39 @@ def main():
     val_criterion = nn.CrossEntropyLoss().to(device)
     model = get_model(args.model, args.dataset, args.data_path)
     epochs = int(args.epochs)
+    filter_matrix = None
+    importance_list = None
 
     for i in range(epochs):
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
         validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device)
-        pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=50000, CLASS_NUM=10, device=device)
+        pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes, device=device)
+        if args.filter_method == "forgetting":
+            pred_result = (np.argmax(pred, axis=1) == label).astype(int)
+            if filter_matrix is None:
+                filter_matrix = pred_result
+            else:
+                filter_matrix = np.vstack((filter_matrix, pred_result))
+        elif args.filter_method == "variance":
+            pass
+        elif args.filter_method == "loss":
+            pass
+        else:
+            exit(1)
+    if args.filter_method == "forgetting":
+        importance_list = calculate_forgetting_score(filter_matrix)
+    elif args.filter_method == "variance":
+        pass
+    elif args.filter_method == "loss":
+        pass
+    else:
+        exit(1)
+
+    subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
+    indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
+
+
 
 
 if __name__ == '__main__':
