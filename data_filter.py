@@ -2,21 +2,21 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
-from utils import get_dataset, get_network
+from utils import get_dataset, get_network, IndexedDataset
 from torch.utils.data import Dataset, DataLoader
 
 
-class IndexedDataset(Dataset):
-    def __init__(self, dataset_name, data_path):
-        _, _, _, _, _, _, dst_train, _, _ = get_dataset(dataset_name, data_path)
-        self.dataset = dst_train
-
-    def __getitem__(self, index):
-        data, target = self.dataset[index]
-        return data, target, index
-
-    def __len__(self):
-        return len(self.dataset)
+# class IndexedDataset(Dataset):
+#     def __init__(self, dataset_name, data_path):
+#         _, _, _, _, _, _, dst_train, _, _ = get_dataset(dataset_name, data_path)
+#         self.dataset = dst_train
+#
+#     def __getitem__(self, index):
+#         data, target = self.dataset[index]
+#         return data, target, index
+#
+#     def __len__(self):
+#         return len(self.dataset)
 
 
 def get_model(model_name, dataset, data_path):
@@ -106,7 +106,7 @@ def train(train_loader, model, criterion, optimizer, device):
         optimizer.step()
 
 
-def validate(val_loader, model, criterion, device):
+def validate(val_loader, model, criterion, device, current_epoch, epochs):
     """
     Run evaluation
     """
@@ -134,7 +134,7 @@ def validate(val_loader, model, criterion, device):
             losses.update(loss.item(), input.size(0))
             top1.update(prec1.item(), input.size(0))
 
-    print(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
+    print('Epoch:{}/{} * Prec@1 {top1.avg:.3f}'.format(current_epoch, epochs, top1=top1))
     return top1.avg, losses.avg
 
 
@@ -178,8 +178,10 @@ def main():
     for i in range(epochs):
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
-        validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device)
-        pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes, device=device)
+        validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i+1,
+                 epochs=epochs)
+        pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes,
+                                  device=device)
         if args.filter_method == "forgetting":
             pred_result = (np.argmax(pred, axis=1) == label).astype(int)
             if filter_matrix is None:
@@ -204,7 +206,7 @@ def main():
     subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
     torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
-
+    print("subset of {} save to file!".format(args.dataset))
 
 
 if __name__ == '__main__':
