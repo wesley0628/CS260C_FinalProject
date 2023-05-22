@@ -9,6 +9,20 @@ from torchvision import datasets, transforms
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from networks import MLP, ConvNet, LeNet, AlexNet, AlexNetBN, VGG11, VGG11BN, ResNet18, ResNet18BN_AP, ResNet18BN
 
+
+class IndexedDataset(Dataset):
+    def __init__(self, dataset_name, data_path):
+        _, _, _, _, _, _, dst_train, _, _ = get_dataset(dataset_name, data_path)
+        self.dataset = dst_train
+
+
+    def __getitem__(self, index):
+        data, target = self.dataset[index]
+        return data, target, index
+
+    def __len__(self):
+        return len(self.dataset)
+
 def get_dataset(dataset, data_path):
     if dataset == 'MNIST':
         channel = 1
@@ -100,6 +114,97 @@ def get_dataset(dataset, data_path):
     testloader = torch.utils.data.DataLoader(dst_test, batch_size=256, shuffle=False, num_workers=0)
     return channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader
 
+
+def get_subset(dataset, data_path):
+    if dataset == 'MNIST':
+        channel = 1
+        im_size = (28, 28)
+        num_classes = 10
+        mean = [0.1307]
+        std = [0.3081]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torch.load("subset_{}.pth".format(dataset))
+        dst_test = datasets.MNIST(data_path, train=False, download=True, transform=transform)
+        class_names = [str(c) for c in range(num_classes)]
+
+    elif dataset == 'FashionMNIST':
+        channel = 1
+        im_size = (28, 28)
+        num_classes = 10
+        mean = [0.2861]
+        std = [0.3530]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torch.load("subset_{}.pth".format(dataset))
+        dst_test = datasets.FashionMNIST(data_path, train=False, download=True, transform=transform)
+        class_names = datasets.FashionMNIST(data_path, train=True, download=True, transform=transform).classes
+
+    elif dataset == 'SVHN':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        mean = [0.4377, 0.4438, 0.4728]
+        std = [0.1980, 0.2010, 0.1970]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torch.load("subset_{}.pth".format(dataset))  # no augmentation
+        dst_test = datasets.SVHN(data_path, split='test', download=True, transform=transform)
+        class_names = [str(c) for c in range(num_classes)]
+
+    elif dataset == 'CIFAR10':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 10
+        mean = [0.4914, 0.4822, 0.4465]
+        std = [0.2023, 0.1994, 0.2010]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torch.load("subset_{}.pth".format(dataset)) # no augmentation
+        dst_test = datasets.CIFAR10(data_path, train=False, download=True, transform=transform)
+        class_names = datasets.CIFAR10(data_path, train=True, download=True, transform=transform).classes
+
+    elif dataset == 'CIFAR100':
+        channel = 3
+        im_size = (32, 32)
+        num_classes = 100
+        mean = [0.5071, 0.4866, 0.4409]
+        std = [0.2673, 0.2564, 0.2762]
+        transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        dst_train = torch.load("subset_{}.pth".format(dataset))# no augmentation
+        dst_test = datasets.CIFAR100(data_path, train=False, download=True, transform=transform)
+        class_names =  datasets.CIFAR100(data_path, train=True, download=True, transform=transform).classes
+
+    elif dataset == 'TinyImageNet':
+        channel = 3
+        im_size = (64, 64)
+        num_classes = 200
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        data = torch.load(os.path.join(data_path, 'tinyimagenet.pt'), map_location='cpu')
+
+        class_names = data['classes']
+
+        images_train = data['images_train']
+        labels_train = data['labels_train']
+        images_train = images_train.detach().float() / 255.0
+        labels_train = labels_train.detach()
+        for c in range(channel):
+            images_train[:,c] = (images_train[:,c] - mean[c])/std[c]
+        dst_train = TensorDataset(images_train, labels_train)  # no augmentation
+
+        images_val = data['images_val']
+        labels_val = data['labels_val']
+        images_val = images_val.detach().float() / 255.0
+        labels_val = labels_val.detach()
+
+        for c in range(channel):
+            images_val[:, c] = (images_val[:, c] - mean[c]) / std[c]
+
+        dst_test = TensorDataset(images_val, labels_val)  # no augmentation
+
+    else:
+        exit('unknown dataset: %s'%dataset)
+
+
+    testloader = torch.utils.data.DataLoader(dst_test, batch_size=256, shuffle=False, num_workers=0)
+    return channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader
 
 
 class TensorDataset(Dataset):

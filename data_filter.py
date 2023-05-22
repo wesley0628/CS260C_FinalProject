@@ -203,7 +203,7 @@ def main():
 
     subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
-
+    torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
 
 
 
