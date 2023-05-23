@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
     parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
-    parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
+    parser.add_argument('--ipc', type=int, default=10, help='image(s) per class')
     parser.add_argument('--eval_mode', type=str, default='S',
                         help='eval_mode')  # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
     parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
@@ -55,6 +55,7 @@ def main():
             args.dataset,
             args.data_path)
     else:
+        print("\n================== Using Filtered Subset for Distillation ==================\n")
         channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader = get_subset(
             args.dataset,
             args.data_path)

@@ -1,4 +1,6 @@
 import argparse
+
+import numpy
 import numpy as np
 import torch
 import torch.nn as nn
@@ -150,15 +152,26 @@ def calculate_forgetting_score(filter_matrix):
     return index_changes
 
 
+def get_class_subset(importance_matrix, labels, class_num, ratio):
+    current_class_index = np.where(labels == class_num)
+    class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
+    # for index in current_class_index:
+    #     class_importance_subset.append((index, importance_matrix[index]))
+    sorted_class_importance_subset = sorted(class_importance_subset, key=lambda x: x[1], reverse=True)
+    class_importance_rank = [t[0] for t in sorted_class_importance_subset]
+    selected_index = class_importance_rank[:int(ratio * len(class_importance_subset))]
+    return selected_index
+
+
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--filter_method', type=str, default='forgetting')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
-    parser.add_argument('--model', type=str, default='MLP')
+    parser.add_argument('--model', type=str, default='ConvNet')
     parser.add_argument('--ratio', type=str, default='0.5')
     parser.add_argument('--data_path', type=str, default='data')
     parser.add_argument('--batch_size', type=str, default='256')
-    parser.add_argument('--epochs', type=str, default='3')
+    parser.add_argument('--epochs', type=str, default='50')
     parser.add_argument('--workers', type=str, default='0')
     args = parser.parse_args()
 
@@ -174,14 +187,17 @@ def main():
     epochs = int(args.epochs)
     filter_matrix = None
     importance_list = None
+    subset_index = list()
+    total_label = None
 
     for i in range(epochs):
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
-        validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i+1,
+        validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i + 1,
                  epochs=epochs)
         pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes,
                                   device=device)
+        total_label = label
         if args.filter_method == "forgetting":
             pred_result = (np.argmax(pred, axis=1) == label).astype(int)
             if filter_matrix is None:
@@ -203,7 +219,11 @@ def main():
     else:
         exit(1)
 
-    subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
+    for i in range(0, num_classes):
+        subset_index += get_class_subset(importance_matrix=importance_list, labels=total_label,
+                                         class_num=i, ratio=float(args.ratio))
+    subset_index = numpy.array(subset_index)
+    # subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
     torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
     print("subset of {} save to file!".format(args.dataset))
