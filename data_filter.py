@@ -108,6 +108,7 @@ def train(train_loader, model, criterion, optimizer, device):
         optimizer.step()
 
 
+
 def validate(val_loader, model, criterion, device, current_epoch, epochs):
     """
     Run evaluation
@@ -158,6 +159,11 @@ def calculate_gradient_variance(filter_matrix):
     return gradient_variances
 
 
+def column_loss_variance(matrix):
+    variances = np.var(matrix, axis=0)
+    return variances
+
+
 def get_class_subset(importance_matrix, labels, class_num, ratio):
     current_class_index = np.where(labels == class_num)
     class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
@@ -169,13 +175,13 @@ def get_class_subset(importance_matrix, labels, class_num, ratio):
 
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--filter_method', type=str, default='gradient_variance')
+    parser.add_argument('--filter_method', type=str, default='loss_variance')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
     parser.add_argument('--model', type=str, default='ConvNet')
     parser.add_argument('--ratio', type=str, default='0.5')
     parser.add_argument('--data_path', type=str, default='data')
     parser.add_argument('--batch_size', type=str, default='256')
-    parser.add_argument('--epochs', type=str, default='30')
+    parser.add_argument('--epochs', type=str, default='50')
     parser.add_argument('--workers', type=str, default='0')
     args = parser.parse_args()
 
@@ -209,7 +215,11 @@ def main():
             else:
                 filter_matrix = np.vstack((filter_matrix, pred_result))
         elif args.filter_method == "loss_variance":
-            pass
+            cur_loss = train_criterion(torch.tensor(pred), torch.LongTensor(label))
+            if filter_matrix is None:
+                filter_matrix = cur_loss
+            else:
+                filter_matrix = np.vstack((filter_matrix, cur_loss))
         elif args.filter_method == "loss":
             pass
         elif args.filter_method == "gradient_variance":
@@ -225,7 +235,7 @@ def main():
     if args.filter_method == "forgetting":
         importance_list = calculate_forgetting_score(filter_matrix)
     elif args.filter_method == "loss_variance":
-        pass
+        importance_list = column_loss_variance(filter_matrix)
     elif args.filter_method == "loss":
         pass
     elif args.filter_method == "gradient_variance":
@@ -237,7 +247,6 @@ def main():
         subset_index += get_class_subset(importance_matrix=importance_list, labels=total_label,
                                          class_num=i, ratio=float(args.ratio))
     subset_index = numpy.array(subset_index)
-    # subset_index = (-importance_list).argsort()[:int(float(args.ratio) * len(dst_dataset))]
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
     torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
     print("subset of {} save to file!".format(args.dataset))
