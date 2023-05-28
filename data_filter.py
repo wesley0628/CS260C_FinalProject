@@ -1,5 +1,5 @@
 import argparse
-
+import random
 import numpy
 import numpy as np
 import torch
@@ -108,7 +108,6 @@ def train(train_loader, model, criterion, optimizer, device):
         optimizer.step()
 
 
-
 def validate(val_loader, model, criterion, device, current_epoch, epochs):
     """
     Run evaluation
@@ -164,18 +163,28 @@ def column_loss_variance(matrix):
     return variances
 
 
-def get_class_subset(importance_matrix, labels, class_num, ratio):
+def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method):
     current_class_index = np.where(labels == class_num)
-    class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
-    sorted_class_importance_subset = sorted(class_importance_subset, key=lambda x: x[1], reverse=True)
-    class_importance_rank = [t[0] for t in sorted_class_importance_subset]
-    selected_index = class_importance_rank[:int(ratio * len(class_importance_subset))]
-    return selected_index
+    if sample_method == "ranking":
+        class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
+        sorted_class_importance_subset = sorted(class_importance_subset, key=lambda x: x[1], reverse=True)
+        class_importance_rank = [t[0] for t in sorted_class_importance_subset]
+        selected_index = class_importance_rank[:int(ratio * len(class_importance_subset))]
+    elif sample_method == "sampling":
+        total_value = sum(importance_matrix[current_class_index])
+        class_importance_subset = [(index, importance_matrix[index]/total_value) for index in current_class_index[0]]
+        probabilities = [t[1] for t in class_importance_subset]
+        class_importance = [t[0] for t in class_importance_subset]
+        selected_index = np.random.choice(a=class_importance, size=int(ratio * len(class_importance_subset)),
+                                          replace=True, p=probabilities)
+    else:
+        exit(1)
+    return selected_index.tolist()
 
 
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--filter_method', type=str, default='loss_variance')
+    parser.add_argument('--filter_method', type=str, default='gradient_variance')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
     parser.add_argument('--model', type=str, default='ConvNet')
     parser.add_argument('--ratio', type=str, default='0.5')
@@ -183,6 +192,7 @@ def main():
     parser.add_argument('--batch_size', type=str, default='256')
     parser.add_argument('--epochs', type=str, default='50')
     parser.add_argument('--workers', type=str, default='0')
+    parser.add_argument('--sample_method', type=str, default='sampling')
     args = parser.parse_args()
 
     device = ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -236,7 +246,7 @@ def main():
         importance_list = calculate_forgetting_score(filter_matrix)
     elif args.filter_method == "loss_variance":
         importance_list = column_loss_variance(filter_matrix)
-    elif args.filter_method == "loss":
+    elif args.filter_method == "root_squared_loss":
         pass
     elif args.filter_method == "gradient_variance":
         importance_list = calculate_gradient_variance(filter_matrix)
@@ -245,7 +255,7 @@ def main():
 
     for i in range(0, num_classes):
         subset_index += get_class_subset(importance_matrix=importance_list, labels=total_label,
-                                         class_num=i, ratio=float(args.ratio))
+                                         class_num=i, ratio=float(args.ratio), sample_method=args.sample_method)
     subset_index = numpy.array(subset_index)
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
     torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
