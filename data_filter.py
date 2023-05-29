@@ -1,4 +1,5 @@
 import argparse
+import math
 import random
 import numpy
 import numpy as np
@@ -158,11 +159,6 @@ def calculate_gradient_variance(filter_matrix):
     return gradient_variances
 
 
-def column_loss_variance(matrix):
-    variances = np.var(matrix, axis=0)
-    return variances
-
-
 def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method):
     current_class_index = np.where(labels == class_num)
     if sample_method == "ranking":
@@ -176,7 +172,7 @@ def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method)
         probabilities = [t[1] for t in class_importance_subset]
         class_importance = [t[0] for t in class_importance_subset]
         selected_index = np.random.choice(a=class_importance, size=int(ratio * len(class_importance_subset)),
-                                          replace=True, p=probabilities)
+                                          replace=False, p=probabilities)
     else:
         exit(1)
     return selected_index.tolist()
@@ -184,7 +180,7 @@ def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method)
 
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--filter_method', type=str, default='gradient_variance')
+    parser.add_argument('--filter_method', type=str, default='root_squared_loss')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
     parser.add_argument('--model', type=str, default='ConvNet')
     parser.add_argument('--ratio', type=str, default='0.5')
@@ -206,7 +202,6 @@ def main():
     model = get_model(args.model, args.dataset, args.data_path)
     epochs = int(args.epochs)
     filter_matrix = None
-    importance_list = None
     subset_index = list()
     total_label = None
 
@@ -218,36 +213,35 @@ def main():
         pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes,
                                   device=device)
         total_label = label
-        if args.filter_method == "forgetting":
-            pred_result = (np.argmax(pred, axis=1) == label).astype(int)
-            if filter_matrix is None:
-                filter_matrix = pred_result
+        if i + 1 > 10:
+            if args.filter_method == "forgetting":
+                pred_result = (np.argmax(pred, axis=1) == label).astype(int)
+                if filter_matrix is None:
+                    filter_matrix = pred_result
+                else:
+                    filter_matrix = np.vstack((filter_matrix, pred_result))
+            elif args.filter_method == "loss_variance" or args.filter_method == "root_squared_loss":
+                cur_loss = train_criterion(torch.tensor(pred), torch.LongTensor(label))
+                if filter_matrix is None:
+                    filter_matrix = np.sqrt(cur_loss)
+                else:
+                    filter_matrix = np.vstack((filter_matrix, np.sqrt(cur_loss)))
+            elif args.filter_method == "gradient_variance":
+                features = pred - np.eye(num_classes)[label]
+                largest_idx = np.expand_dims(np.argmax(pred, axis=1), axis=1)
+                if filter_matrix is None:
+                    filter_matrix = np.take_along_axis(features, largest_idx, axis=1)
+                else:
+                    filter_matrix = np.concatenate((filter_matrix, np.take_along_axis(features, largest_idx, axis=1)),
+                                                   axis=1)
             else:
-                filter_matrix = np.vstack((filter_matrix, pred_result))
-        elif args.filter_method == "loss_variance":
-            cur_loss = train_criterion(torch.tensor(pred), torch.LongTensor(label))
-            if filter_matrix is None:
-                filter_matrix = cur_loss
-            else:
-                filter_matrix = np.vstack((filter_matrix, cur_loss))
-        elif args.filter_method == "loss":
-            pass
-        elif args.filter_method == "gradient_variance":
-            features = pred - np.eye(num_classes)[label]
-            largest_idx = np.expand_dims(np.argmax(pred, axis=1), axis=1)
-            if filter_matrix is None:
-                filter_matrix = np.take_along_axis(features, largest_idx, axis=1)
-            else:
-                filter_matrix = np.concatenate((filter_matrix,  np.take_along_axis(features, largest_idx, axis=1)),
-                                               axis=1)
-        else:
-            exit(1)
+                exit(1)
     if args.filter_method == "forgetting":
         importance_list = calculate_forgetting_score(filter_matrix)
     elif args.filter_method == "loss_variance":
-        importance_list = column_loss_variance(filter_matrix)
+        importance_list = np.var(filter_matrix, axis=0)
     elif args.filter_method == "root_squared_loss":
-        pass
+        importance_list = np.average(filter_matrix, axis=0)
     elif args.filter_method == "gradient_variance":
         importance_list = calculate_gradient_variance(filter_matrix)
     else:
@@ -256,9 +250,9 @@ def main():
     for i in range(0, num_classes):
         subset_index += get_class_subset(importance_matrix=importance_list, labels=total_label,
                                          class_num=i, ratio=float(args.ratio), sample_method=args.sample_method)
-    subset_index = numpy.array(subset_index)
+    subset_index = np.array(subset_index)
     indexed_subset = torch.utils.data.Subset(dst_dataset, indices=subset_index)
-    torch.save(indexed_subset, 'subset_{}.pth'.format(args.dataset))
+    torch.save(indexed_subset, 'subset_{}_{}_{}.pth'.format(args.dataset, args.filter_method, args.sample_method))
     print("subset of {} save to file!".format(args.dataset))
 
 

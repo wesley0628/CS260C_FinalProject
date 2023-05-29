@@ -131,12 +131,12 @@ def main():
                         args.dc_aug_param = get_daparam(args.dataset, args.model, model_eval,
                                                         args.ipc)  # This augmentation parameter set is only for DC method. It will be muted when args.dsa is True.
                         print('DC augmentation parameters: \n', args.dc_aug_param)
-                    args.epoch_eval_train = 1000
+                    # args.epoch_eval_train = 1000
 
-                    # if args.dsa or args.dc_aug_param['strategy'] != 'none':
-                    #     args.epoch_eval_train = 1000  # Training with data augmentation needs more epochs.
-                    # else:
-                    #     args.epoch_eval_train = 300
+                    if args.dsa or args.dc_aug_param['strategy'] != 'none':
+                        args.epoch_eval_train = 1000  # Training with data augmentation needs more epochs.
+                    else:
+                        args.epoch_eval_train = 300
 
                     accs = []
                     for it_eval in range(args.num_eval):
