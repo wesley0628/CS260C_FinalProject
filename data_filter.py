@@ -109,6 +109,24 @@ def train(train_loader, model, criterion, optimizer, device):
         optimizer.step()
 
 
+def calculate_el2n(loader, model, TRAIN_NUM, device):
+    model.eval()
+    el2n_score = torch.zeros(TRAIN_NUM).to(device)
+    labels = torch.zeros(TRAIN_NUM, dtype=torch.int)
+    with torch.no_grad():
+        for i, (input, target, idx) in enumerate(loader):
+            input_var = input.to(device)
+            output = model(input_var).to(device)
+            normalized_output = nn.Softmax(dim=1)(output)
+            curr_el2n = torch.linalg.norm(normalized_output -
+                                          nn.functional.one_hot(target,
+                                                                num_classes=normalized_output.size(-1)).
+                                          to(device), dim=1)
+            labels[idx] = target.int()
+            el2n_score[idx] = curr_el2n
+    return el2n_score.cpu().data.numpy(), labels.cpu().data.numpy()
+
+
 def validate(val_loader, model, criterion, device, current_epoch, epochs):
     """
     Run evaluation
@@ -168,27 +186,35 @@ def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method)
         selected_index = class_importance_rank[:int(ratio * len(class_importance_subset))]
     elif sample_method == "sampling":
         total_value = sum(importance_matrix[current_class_index])
-        class_importance_subset = [(index, importance_matrix[index]/total_value) for index in current_class_index[0]]
+        class_importance_subset = [(index, importance_matrix[index] / total_value) for index in current_class_index[0]]
         probabilities = [t[1] for t in class_importance_subset]
         class_importance = [t[0] for t in class_importance_subset]
         selected_index = np.random.choice(a=class_importance, size=int(ratio * len(class_importance_subset)),
                                           replace=False, p=probabilities)
+        selected_index = selected_index.tolist()
+    elif sample_method == "slice":
+        class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
+        from_ = int(0.65 * len(class_importance_subset))
+        to_ = int(0.85 * len(class_importance_subset))
+        sorted_class_importance_subset = sorted(class_importance_subset, key=lambda x: x[1], reverse=True)
+        class_importance_rank = [t[0] for t in sorted_class_importance_subset]
+        selected_index = class_importance_rank[from_:to_]
     else:
         exit(1)
-    return selected_index.tolist()
+    return selected_index
 
 
 def main():
     parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--filter_method', type=str, default='root_squared_loss')
+    parser.add_argument('--filter_method', type=str, default='el2n')
     parser.add_argument('--dataset', type=str, default='CIFAR10')
     parser.add_argument('--model', type=str, default='ConvNet')
     parser.add_argument('--ratio', type=str, default='0.5')
     parser.add_argument('--data_path', type=str, default='data')
     parser.add_argument('--batch_size', type=str, default='256')
-    parser.add_argument('--epochs', type=str, default='50')
+    parser.add_argument('--epochs', type=str, default='3')
     parser.add_argument('--workers', type=str, default='0')
-    parser.add_argument('--sample_method', type=str, default='sampling')
+    parser.add_argument('--sample_method', type=str, default='slice')
     args = parser.parse_args()
 
     device = ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -200,42 +226,59 @@ def main():
     train_criterion = nn.CrossEntropyLoss(reduction='none').to(device)  # (Note)
     val_criterion = nn.CrossEntropyLoss().to(device)
     model = get_model(args.model, args.dataset, args.data_path)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     epochs = int(args.epochs)
     filter_matrix = None
     subset_index = list()
     total_label = None
+    all_el2n_score = None
 
-    for i in range(epochs):
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
-        validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i + 1,
-                 epochs=epochs)
-        pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes,
-                                  device=device)
-        total_label = label
-        if i + 1 > 10:
-            if args.filter_method == "forgetting":
-                pred_result = (np.argmax(pred, axis=1) == label).astype(int)
-                if filter_matrix is None:
-                    filter_matrix = pred_result
-                else:
-                    filter_matrix = np.vstack((filter_matrix, pred_result))
-            elif args.filter_method == "loss_variance" or args.filter_method == "root_squared_loss":
-                cur_loss = train_criterion(torch.tensor(pred), torch.LongTensor(label))
-                if filter_matrix is None:
-                    filter_matrix = np.sqrt(cur_loss)
-                else:
-                    filter_matrix = np.vstack((filter_matrix, np.sqrt(cur_loss)))
-            elif args.filter_method == "gradient_variance":
-                features = pred - np.eye(num_classes)[label]
-                largest_idx = np.expand_dims(np.argmax(pred, axis=1), axis=1)
-                if filter_matrix is None:
-                    filter_matrix = np.take_along_axis(features, largest_idx, axis=1)
-                else:
-                    filter_matrix = np.concatenate((filter_matrix, np.take_along_axis(features, largest_idx, axis=1)),
-                                                   axis=1)
+    if args.filter_method == 'el2n':
+        epochs = 15
+        for i in range(epochs):
+            train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
+            validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i + 1,
+                     epochs=epochs)
+            current_el2n, total_label = calculate_el2n(loader=train_dl, model=model,
+                                                       TRAIN_NUM=len(dst_dataset), device=device)
+            if all_el2n_score is None:
+                all_el2n_score = current_el2n
             else:
-                exit(1)
+                all_el2n_score = np.vstack((all_el2n_score, current_el2n))
+    else:
+        for i in range(epochs):
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+            train(train_loader=train_dl, model=model, criterion=train_criterion, optimizer=optimizer, device=device)
+            validate(val_loader=val_loader, model=model, criterion=val_criterion, device=device, current_epoch=i + 1,
+                     epochs=epochs)
+            pred, label = predictions(loader=train_dl, model=model, TRAIN_NUM=len(dst_dataset), CLASS_NUM=num_classes,
+                                      device=device)
+            total_label = label
+            if i + 1 > 10:
+                if args.filter_method == "forgetting":
+                    pred_result = (np.argmax(pred, axis=1) == label).astype(int)
+                    if filter_matrix is None:
+                        filter_matrix = pred_result
+                    else:
+                        filter_matrix = np.vstack((filter_matrix, pred_result))
+                elif args.filter_method == "loss_variance" or args.filter_method == "root_squared_loss":
+                    cur_loss = train_criterion(torch.tensor(pred), torch.LongTensor(label))
+                    if filter_matrix is None:
+                        filter_matrix = np.sqrt(cur_loss)
+                    else:
+                        filter_matrix = np.vstack((filter_matrix, np.sqrt(cur_loss)))
+                elif args.filter_method == "gradient_variance":
+                    features = pred - np.eye(num_classes)[label]
+                    largest_idx = np.expand_dims(np.argmax(pred, axis=1), axis=1)
+                    if filter_matrix is None:
+                        filter_matrix = np.take_along_axis(features, largest_idx, axis=1)
+                    else:
+                        filter_matrix = np.concatenate(
+                            (filter_matrix, np.take_along_axis(features, largest_idx, axis=1)),
+                            axis=1)
+                else:
+                    exit(1)
+
     if args.filter_method == "forgetting":
         importance_list = calculate_forgetting_score(filter_matrix)
     elif args.filter_method == "loss_variance":
@@ -244,6 +287,8 @@ def main():
         importance_list = np.average(filter_matrix, axis=0)
     elif args.filter_method == "gradient_variance":
         importance_list = calculate_gradient_variance(filter_matrix)
+    elif args.filter_method == "el2n":
+        importance_list = all_el2n_score[-1, :]
     else:
         exit(1)
 
