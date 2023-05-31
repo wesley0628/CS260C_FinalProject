@@ -194,7 +194,7 @@ def get_class_subset(importance_matrix, labels, class_num, ratio, sample_method)
         selected_index = selected_index.tolist()
     elif sample_method == "slice":
         class_importance_subset = [(index, importance_matrix[index]) for index in current_class_index[0]]
-        from_ = int(0.65 * len(class_importance_subset))
+        from_ = int(0.80 * len(class_importance_subset))
         to_ = int(0.85 * len(class_importance_subset))
         sorted_class_importance_subset = sorted(class_importance_subset, key=lambda x: x[1], reverse=True)
         class_importance_rank = [t[0] for t in sorted_class_importance_subset]
