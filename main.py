@@ -77,7 +77,7 @@ def main():
     data_save = []
 
     for exp in range(args.num_exp):
-        wandb.init(id=args.wandb_name + " " + str(args.dataset) + " " + str(args.ipc) + " " + str(exp) + "subset:" + str(args.subset), project='CS260C', config=args)
+        wandb.init(id=args.wandb_name + " " + str(args.dataset) + " " + str(args.ipc) + " " + str(exp) + " " + str(args.subset), project='CS260C', config=args)
         print('\n================== Exp %d ==================\n ' % exp)
         print('Hyper-parameters: \n', args.__dict__)
         print('Evaluation model pool: ', model_eval_pool)
