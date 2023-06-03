@@ -8,37 +8,43 @@ import torch.nn as nn
 from torchvision.utils import save_image
 from utils import get_loops, get_dataset, get_network, get_eval_pool, evaluate_synset, get_daparam, match_loss, \
     get_time, TensorDataset, epoch, DiffAugment, ParamDiffAug, IndexedDataset, get_subset
+import wandb
 
+
+parser = argparse.ArgumentParser(description='Parameter Processing')
+parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
+parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+parser.add_argument('--model', type=str, default='ConvNet', help='model')
+parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
+parser.add_argument('--eval_mode', type=str, default='S',
+                    help='eval_mode')  # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
+parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
+parser.add_argument('--num_eval', type=int, default=20, help='the number of evaluating randomly initialized models')
+parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
+parser.add_argument('--Iteration', type=int, default=1000, help='training iterations')
+parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
+parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
+parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
+parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
+parser.add_argument('--init', type=str, default='noise',
+                    help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
+parser.add_argument('--dsa_strategy', type=str, default='None', help='differentiable Siamese augmentation strategy')
+parser.add_argument('--data_path', type=str, default='data', help='dataset path')
+parser.add_argument('--save_path', type=str, default='result', help='path to save results')
+parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
+parser.add_argument('--subset', type=str, default='False')
+parser.add_argument('--filter_method', type=str, default='el2n')
+parser.add_argument('--sample_method', type=str, default='slice')
+parser.add_argument('--wandb_name', type=str, default='wandb_project')
 
 def main():
-    parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
-    parser.add_argument('--model', type=str, default='ConvNet', help='model')
-    parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
-    parser.add_argument('--eval_mode', type=str, default='S',
-                        help='eval_mode')  # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
-    parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
-    parser.add_argument('--num_eval', type=int, default=20, help='the number of evaluating randomly initialized models')
-    parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=1000, help='training iterations')
-    parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
-    parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
-    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
-    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
-    parser.add_argument('--init', type=str, default='noise',
-                        help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
-    parser.add_argument('--dsa_strategy', type=str, default='None', help='differentiable Siamese augmentation strategy')
-    parser.add_argument('--data_path', type=str, default='data', help='dataset path')
-    parser.add_argument('--save_path', type=str, default='result', help='path to save results')
-    parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
-    parser.add_argument('--subset', type=str, default='False')
-
-    args = parser.parse_args()
+    global args
     args.outer_loop, args.inner_loop = get_loops(args.ipc)
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
+
+
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -56,9 +62,11 @@ def main():
             args.data_path)
     else:
         print("\n================== Using Filtered Subset for Distillation ==================\n")
+        print("\n================== Filter Method: {} Sample Method: {} ==================\n".
+              format(args.filter_method, args.sample_method))
         channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader = get_subset(
             args.dataset,
-            args.data_path)
+            args.data_path, args.filter_method, args.sample_method)
 
     model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
 
@@ -69,6 +77,7 @@ def main():
     data_save = []
 
     for exp in range(args.num_exp):
+        wandb.init(id=args.wandb_name + " " + str(args.dataset) + " " + str(args.ipc) + " " + str(exp) + "subset:" + str(args.subset), project='CS260C', config=args)
         print('\n================== Exp %d ==================\n ' % exp)
         print('Hyper-parameters: \n', args.__dict__)
         print('Evaluation model pool: ', model_eval_pool)
@@ -149,6 +158,7 @@ def main():
                         accs.append(acc_test)
                     print('Evaluate %d random %s, mean = %.4f std = %.4f\n-------------------------' % (
                         len(accs), model_eval, np.mean(accs), np.std(accs)))
+                    wandb.log({"iter": it, "eval_acc": np.mean(accs)})
 
                     if it == args.Iteration:  # record the final results
                         accs_all_exps[model_eval] += accs
@@ -239,6 +249,7 @@ def main():
 
             if it % 10 == 0:
                 print('%s iter = %04d, loss = %.4f' % (get_time(), it, loss_avg))
+                wandb.log({'iter': it, 'loss': loss_avg})
 
             if it == args.Iteration:  # only record the final results
                 data_save.append([copy.deepcopy(image_syn.detach().cpu()), copy.deepcopy(label_syn.detach().cpu())])
@@ -248,6 +259,7 @@ def main():
                                                                                                    args.dataset,
                                                                                                    args.model,
                                                                                                    args.ipc)))
+        wandb.finish()
 
     print('\n==================== Final Results ====================\n')
     for key in model_eval_pool:
@@ -257,4 +269,5 @@ def main():
 
 
 if __name__ == '__main__':
+    args = parser.parse_args()
     main()
